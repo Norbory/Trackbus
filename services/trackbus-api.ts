@@ -1,7 +1,11 @@
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 
-const DEFAULT_TUNNEL_BASE_URL = "https://trackbus-server.onrender.com";
+const DEFAULT_TUNNEL_BASE_URL = "https://jwwgn92n-3000.brs.devtunnels.ms/";
+// Ruta para desarrollo en el servidor
+// "https://jwwgn92n-3000.brs.devtunnels.ms/";
+// Ruta para producción en Render
+// "https://trackbus-server.onrender.com";
 
 export type RutaId = "sur" | "norte" | "centro" | "este";
 
@@ -21,6 +25,9 @@ export type Paradero = {
   nombre: string;
   latitud: number;
   longitud: number;
+  idRuta: RutaId;
+  sentido: "ida" | "vuelta";
+  orden: number;
   esInicial: boolean;
 };
 

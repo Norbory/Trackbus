@@ -1,27 +1,50 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { Image } from "expo-image";
 import { useEffect, useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Modal,
+  NativeSyntheticEvent,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+  type NativeScrollEvent,
+} from "react-native";
 import {
   type Bus,
+  type Paradero,
   type Ruta,
   type Viaje,
   getBuses,
+  getParaderos,
   getRutas,
   getViajes,
 } from "@/services/trackbus-api";
 
 type EstadoRuta = "En salida" | "En ruta" | "Programado";
+type SentidoUI = "Ida" | "Vuelta" | "-";
 
 type RutaUI = {
   id: Ruta["id"];
   nombre: string;
   salida: string;
   llegada: string;
-  unidad: string;
-  conductor: string;
+  sentido: SentidoUI;
   estado: EstadoRuta;
+  paraderos: string[];
   imagenRuta: number;
+};
+
+type TimelineItem = {
+  key: string;
+  nombreRuta: string;
+  salida: string;
+  llegada: string;
+  sentido: SentidoUI;
+  estado: EstadoRuta;
+  paraderos: string[];
 };
 
 const colorEstado: Record<EstadoRuta, string> = {
@@ -59,17 +82,41 @@ function normalizarNombreRuta(nombre: string): string {
   return nombre.replace(/^ruta\s+/i, "").trim();
 }
 
+function mapParaderoToRutaInfo(paradero: Paradero): {
+  nombre: string;
+  idRuta: Ruta["id"] | undefined;
+  sentido: "ida" | "vuelta" | undefined;
+  orden: number;
+} {
+  const raw = paradero as any;
+  const idRuta = (raw.idRuta ?? raw.id_ruta) as Ruta["id"] | undefined;
+  const sentido = raw.sentido as "ida" | "vuelta" | undefined;
+  const orden = typeof raw.orden === "number" ? raw.orden : Number.MAX_SAFE_INTEGER;
+
+  return {
+    nombre: paradero.nombre,
+    idRuta,
+    sentido,
+    orden,
+  };
+}
+
 export default function HomeScreen() {
+  const { width: windowWidth } = useWindowDimensions();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rutaSeleccionada, setRutaSeleccionada] = useState<RutaUI | null>(null);
+  const [timelinePageIndex, setTimelinePageIndex] = useState(0);
   const [data, setData] = useState<{
     rutas: Ruta[];
     buses: Bus[];
     viajes: Viaje[];
+    paraderos: Paradero[];
   }>({
     rutas: [],
     buses: [],
     viajes: [],
+    paraderos: [],
   });
 
   const rutasUi = useMemo<RutaUI[]>(() => {
@@ -84,19 +131,102 @@ export default function HomeScreen() {
 
       const salida = formatHora(viajesRuta[0]?.fec_actu);
       const llegada = formatHora(viajesRuta[viajesRuta.length - 1]?.fec_actu);
+      const ultimoViaje = viajesRuta[viajesRuta.length - 1];
+
+      const paraderoUltimoViaje = data.paraderos.find(
+        (paradero) => paradero.id === ultimoViaje?.id_paradero,
+      );
+
+      const rawSentido = (paraderoUltimoViaje as any)?.sentido;
+      const sentido: SentidoUI =
+        rawSentido === "vuelta" ? "Vuelta" : rawSentido === "ida" ? "Ida" : "-";
+
+      const paraderosRuta = data.paraderos
+        .map(mapParaderoToRutaInfo)
+        .filter((paradero) => paradero.idRuta === ruta.id)
+        .sort((a, b) => a.orden - b.orden);
+
+      const paraderosIda = paraderosRuta.filter((paradero) => paradero.sentido === "ida");
+      const baseParaderos = paraderosIda.length > 0 ? paraderosIda : paraderosRuta;
+      const primeraParada = baseParaderos[0]?.nombre ?? "--";
+      const ultimaParada =
+        baseParaderos[baseParaderos.length - 1]?.nombre ?? primeraParada;
 
       return {
         id: ruta.id,
         nombre: normalizarNombreRuta(ruta.nombre),
         salida,
         llegada,
-        unidad: busRuta ? `Bus ${busRuta.placa}` : "Bus sin asignar",
-        conductor: busRuta?.conductor ?? "Sin asignar",
+        sentido,
         estado: mapEstadoBus(busRuta?.estado),
+        paraderos: [primeraParada, ultimaParada],
         imagenRuta: imagenPorRuta[ruta.id],
       };
     });
-  }, [data.buses, data.rutas, data.viajes]);
+  }, [data.buses, data.paraderos, data.rutas, data.viajes]);
+
+  const timelineItems = useMemo<TimelineItem[]>(() => {
+    const paraderosPorId = new Map(data.paraderos.map((paradero) => [paradero.id, paradero]));
+
+    return data.rutas.flatMap((ruta) => {
+      const busRuta = data.buses.find((bus) => bus.id_ruta === ruta.id);
+      const nombreRuta = normalizarNombreRuta(ruta.nombre);
+
+      return (["ida", "vuelta"] as const).map((sentidoRaw) => {
+        const sentido: SentidoUI = sentidoRaw === "ida" ? "Ida" : "Vuelta";
+
+        const viajesSentido = data.viajes
+          .filter((viaje) => {
+            if (viaje.id_ruta !== ruta.id) return false;
+
+            const paradero = paraderosPorId.get(viaje.id_paradero);
+            return paradero?.sentido === sentidoRaw;
+          })
+          .sort(
+            (a, b) =>
+              new Date(a.fec_actu).getTime() - new Date(b.fec_actu).getTime(),
+          );
+
+        const paraderosSentido = data.paraderos
+          .map(mapParaderoToRutaInfo)
+          .filter(
+            (paradero) =>
+              paradero.idRuta === ruta.id && paradero.sentido === sentidoRaw,
+          )
+          .sort((a, b) => a.orden - b.orden);
+
+        const primeraParada = paraderosSentido[0]?.nombre ?? "--";
+        const ultimaParada =
+          paraderosSentido[paraderosSentido.length - 1]?.nombre ?? primeraParada;
+
+        return {
+          key: `${ruta.id}-${sentidoRaw}`,
+          nombreRuta,
+          salida: formatHora(viajesSentido[0]?.fec_actu),
+          llegada: formatHora(viajesSentido[viajesSentido.length - 1]?.fec_actu),
+          sentido,
+          estado: mapEstadoBus(busRuta?.estado),
+          paraderos: [primeraParada, ultimaParada],
+        };
+      });
+    });
+  }, [data.buses, data.paraderos, data.rutas, data.viajes]);
+
+  const timelinePages = useMemo(
+    () => [
+      {
+        id: "ida",
+        titulo: "Ida",
+        items: timelineItems.filter((item) => item.sentido === "Ida"),
+      },
+      {
+        id: "vuelta",
+        titulo: "Vuelta",
+        items: timelineItems.filter((item) => item.sentido === "Vuelta"),
+      },
+    ],
+    [timelineItems],
+  );
 
   const rutaActiva = useMemo(() => {
     return rutasUi.find((ruta) => ruta.estado === "En ruta") ?? rutasUi[0];
@@ -107,11 +237,24 @@ export default function HomeScreen() {
 
     const candidatas = rutasUi
       .map((ruta) => ruta.salida)
-      .filter((hora) => hora !== "--:--")
+      .filter((hora) => hora === "07:30")
       .sort();
 
-    return candidatas[0] ?? "--:--";
+    return candidatas[0] ?? "07:30";
   }, [rutasUi]);
+
+  useEffect(() => {
+    setTimelinePageIndex((prev) => Math.min(prev, Math.max(timelinePages.length - 1, 0)));
+  }, [timelinePages.length]);
+
+  const timelinePageWidth = Math.max(windowWidth - 68, 250);
+
+  const onTimelineScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const offsetX = event.nativeEvent.contentOffset.x;
+    const index = Math.round(offsetX / timelinePageWidth);
+    const boundedIndex = Math.max(0, Math.min(index, timelinePages.length - 1));
+    setTimelinePageIndex(boundedIndex);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -121,10 +264,11 @@ export default function HomeScreen() {
         setLoading(true);
         setError(null);
 
-        const [rutas, buses, viajes] = await Promise.all([
+        const [rutas, buses, viajes, paraderos] = await Promise.all([
           getRutas(),
           getBuses(),
           getViajes(),
+          getParaderos(),
         ]);
 
         if (!mounted) return;
@@ -133,6 +277,7 @@ export default function HomeScreen() {
           rutas,
           buses,
           viajes,
+          paraderos,
         });
       } catch (err) {
         if (!mounted) return;
@@ -164,31 +309,31 @@ export default function HomeScreen() {
 
         <View style={styles.tarjetaPrincipal}>
           <Image
-            source={require("@/assets/images/burrito.png")}
+            source={require("@/assets/images/bus_rojo.jpg")}
             style={styles.imagenBus}
             contentFit="cover"
           />
           <View style={styles.capaOscura} />
           <View style={styles.infoPrincipal}>
             <Text style={styles.tituloPrincipal}>Burrito en servicio</Text>
-            <Text style={styles.subPrincipal}>
-              {rutaActiva?.unidad ?? "Bus sin asignar"} - Ruta {rutaActiva?.nombre ?? "-"}
-            </Text>
+            {/* <Text style={styles.subPrincipal}>
+              Ruta para tomar la puerta 3
+            </Text> */}
           </View>
         </View>
 
         <View style={styles.estadoRapidoFila}>
           <View style={styles.fichaEstadoRapida}>
-            <Text style={styles.etiquetaFicha}>Ruta activa</Text>
-            <Text style={styles.valorFicha}>{rutaActiva?.nombre ?? "-"}</Text>
+            <Text style={styles.etiquetaFicha}>Ruta</Text>
+            <Text style={styles.valorFicha}>Perimetral</Text>
           </View>
           <View style={styles.fichaEstadoRapida}>
-            <Text style={styles.etiquetaFicha}>Siguiente salida</Text>
+            <Text style={styles.etiquetaFicha}>Hora de inicio</Text>
             <Text style={styles.valorFicha}>{siguienteSalida}</Text>
           </View>
           <View style={styles.fichaEstadoRapida}>
-            <Text style={styles.etiquetaFicha}>Conductor</Text>
-            <Text style={styles.valorFichaMini}>{rutaActiva?.conductor ?? "-"}</Text>
+            <Text style={styles.etiquetaFicha}>Estado</Text>
+            <Text style={styles.valorFichaMini}>{rutaActiva?.estado ?? "-"}</Text>
           </View>
         </View>
       </View>
@@ -207,7 +352,11 @@ export default function HomeScreen() {
               contentContainerStyle={styles.rutasScroller}
             >
               {rutasUi.map((ruta) => (
-                <View key={ruta.id} style={styles.cardRuta}>
+                <Pressable
+                  key={ruta.id}
+                  style={styles.cardRuta}
+                  onPress={() => setRutaSeleccionada(ruta)}
+                >
                   <Image
                     source={ruta.imagenRuta}
                     style={styles.imagenRuta}
@@ -225,10 +374,12 @@ export default function HomeScreen() {
                         <Text style={styles.badgeEstadoTexto}>{ruta.estado}</Text>
                       </View>
                     </View>
-                    <Text style={styles.cardRutaSub}>{ruta.unidad}</Text>
-                    <Text style={styles.cardRutaSub}>Conductor: {ruta.conductor}</Text>
+                    <Text style={styles.cardRutaSub}>
+                      Paraderos: {ruta.paraderos.join(" - ")}
+                    </Text>
+                    <Text style={styles.cardRutaSub}>Estado: {ruta.estado}</Text>
                   </View>
-                </View>
+                </Pressable>
               ))}
             </ScrollView>
 
@@ -238,36 +389,108 @@ export default function HomeScreen() {
                 <Text style={styles.timelineSub}>Hoy</Text>
               </View>
 
-              {rutasUi.map((ruta, index) => (
-                <View key={`${ruta.id}-${ruta.salida}`} style={styles.timelineItem}>
-                  <View style={styles.timelineColIzquierda}>
-                    <Text style={styles.horaSalida}>{ruta.salida}</Text>
-                    <Text style={styles.horaLlegada}>a {ruta.llegada}</Text>
-                  </View>
+              <ScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={onTimelineScrollEnd}
+                contentContainerStyle={styles.timelineCarouselTrack}
+              >
+                {timelinePages.map((page) => (
+                  <View key={page.id} style={[styles.timelinePage, { width: timelinePageWidth }]}>
+                    <Text style={styles.timelinePageTitle}>Sentido {page.titulo}</Text>
 
-                  <View style={styles.timelineColCentro}>
-                    <View
-                      style={[
-                        styles.timelinePunto,
-                        { backgroundColor: colorEstado[ruta.estado] },
-                      ]}
-                    />
-                    {index !== rutasUi.length - 1 && (
-                      <View style={styles.timelineLinea} />
-                    )}
-                  </View>
+                    {page.items.map((item, index) => (
+                      <View key={item.key} style={styles.timelineItem}>
+                        <View style={styles.timelineColIzquierda}>
+                          <Text style={styles.horaSalida}>{item.salida}</Text>
+                        </View>
 
-                  <View style={styles.timelineColDerecha}>
-                    <Text style={styles.timelineRuta}>Ruta {ruta.nombre}</Text>
-                    <Text style={styles.timelineDetalle}>{ruta.unidad}</Text>
-                    <Text style={styles.timelineDetalle}>Conductor: {ruta.conductor}</Text>
+                        <View style={styles.timelineColCentro}>
+                          <View
+                            style={[
+                              styles.timelinePunto,
+                              { backgroundColor: colorEstado[item.estado] },
+                            ]}
+                          />
+                          {index !== page.items.length - 1 && (
+                            <View style={styles.timelineLinea} />
+                          )}
+                        </View>
+
+                        <View style={styles.timelineColDerecha}>
+                          <Text style={styles.timelineRuta}>Ruta {item.nombreRuta}</Text>
+                          <Text style={styles.timelineDetalle}>Sentido: {item.sentido}</Text>
+                          <Text style={styles.timelineDetalle}>
+                            Paraderos: {item.paraderos.join(" - ")}
+                          </Text>
+                        </View>
+                      </View>
+                    ))}
                   </View>
-                </View>
-              ))}
+                ))}
+              </ScrollView>
+
+              <View style={styles.timelineDots}>
+                {timelinePages.map((page, index) => (
+                  <View
+                    key={page.id}
+                    style={[
+                      styles.timelineDot,
+                      index === timelinePageIndex && styles.timelineDotActive,
+                    ]}
+                  />
+                ))}
+              </View>
             </View>
           </>
         )}
       </View>
+
+      <Modal
+        visible={rutaSeleccionada !== null}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setRutaSeleccionada(null)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setRutaSeleccionada(null)}
+        >
+          <Pressable style={styles.modalCard} onPress={() => undefined}>
+            {rutaSeleccionada && (
+              <>
+                <Image
+                  source={rutaSeleccionada.imagenRuta}
+                  style={styles.modalImagen}
+                  contentFit="contain"
+                />
+                <Pressable
+                  style={styles.modalCerrar}
+                  onPress={() => setRutaSeleccionada(null)}
+                >
+                  <MaterialIcons name="close" size={20} color="#FFFFFF" />
+                  <Text style={styles.modalCerrarTexto}>Salir</Text>
+                </Pressable>
+                <View style={styles.modalContenido}>
+                  <View style={styles.modalHeader}>
+                    <Text style={styles.modalTitulo}>
+                      Ruta {rutaSeleccionada.nombre}
+                    </Text>
+                    <Text style={styles.modalSubtitulo}>
+                      Paraderos: {rutaSeleccionada.paraderos.join(" - ")}
+                    </Text>
+                  </View>
+
+                  <Text style={styles.modalEstado}>
+                    Estado: {rutaSeleccionada.estado}
+                  </Text>
+                </View>
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }
@@ -392,6 +615,9 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
+  cardRutaPressed: {
+    opacity: 0.92,
+  },
   imagenRuta: {
     width: "100%",
     height: 120,
@@ -443,7 +669,21 @@ const styles = StyleSheet.create({
   },
   timelineSub: {
     color: "#8A8AA3",
-    fontSize: 14,
+    fontSize: 12,
+    maxWidth: 160,
+    textAlign: "right",
+  },
+  timelineCarouselTrack: {
+    alignItems: "flex-start",
+  },
+  timelinePage: {
+    paddingRight: 8,
+  },
+  timelinePageTitle: {
+    color: "#26253E",
+    fontSize: 13,
+    fontWeight: "800",
+    marginBottom: 8,
   },
   timelineItem: {
     flexDirection: "row",
@@ -492,6 +732,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 2,
   },
+  timelineDots: {
+    marginTop: 6,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+  },
+  timelineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#D7D8E8",
+  },
+  timelineDotActive: {
+    width: 18,
+    backgroundColor: "#3B82F6",
+  },
   info: {
     fontSize: 14,
     color: "#3A3954",
@@ -499,5 +756,65 @@ const styles = StyleSheet.create({
   error: {
     fontSize: 14,
     color: "#B91C1C",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(8, 10, 20, 0.82)",
+  },
+  modalCard: {
+    flex: 1,
+    overflow: "hidden",
+    backgroundColor: "#000000",
+    alignItems: "stretch",
+    justifyContent: "flex-end",
+  },
+  modalImagen: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  modalContenido: {
+    paddingHorizontal: 20,
+    paddingTop: 28,
+    paddingBottom: 32,
+    gap: 10,
+    backgroundColor: "rgba(8, 10, 20, 0.38)",
+  },
+  modalHeader: {
+    gap: 6,
+  },
+  modalTitulo: {
+    color: "#FFFFFF",
+    fontSize: 24,
+    fontWeight: "900",
+  },
+  modalSubtitulo: {
+    color: "#C8C9D9",
+    fontSize: 14,
+    marginTop: 4,
+  },
+  modalCerrar: {
+    position: "absolute",
+    top: 56,
+    right: 20,
+    minHeight: 42,
+    borderRadius: 21,
+    paddingHorizontal: 14,
+    backgroundColor: "rgba(12, 14, 26, 0.72)",
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 1,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.16)",
+  },
+  modalCerrarTexto: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  modalEstado: {
+    color: "#E7E8F4",
+    fontSize: 15,
+    fontWeight: "700",
   },
 });
