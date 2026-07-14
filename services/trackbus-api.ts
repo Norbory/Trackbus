@@ -1,7 +1,7 @@
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 
-const DEFAULT_TUNNEL_BASE_URL = "https://jwwgn92n-3000.brs.devtunnels.ms/";
+const DEFAULT_TUNNEL_BASE_URL = "https://2mgpcszm-3000.brs.devtunnels.ms/";
 // Ruta para desarrollo en el servidor
 // "https://jwwgn92n-3000.brs.devtunnels.ms/";
 // Ruta para producción en Render
@@ -48,6 +48,7 @@ export type Viaje = {
 
 export type BusPosition = {
   busId: string;
+  id_ruta?: RutaId;
   latitude: number;
   longitude: number;
   speedKmh?: number;

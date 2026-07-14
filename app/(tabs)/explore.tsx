@@ -132,6 +132,78 @@ function rutaLogicaDeParadas(paradas: Parada[]): LatLng[] {
   }));
 }
 
+function proyectarPuntoEnSegmento(
+  point: LatLng,
+  start: LatLng,
+  end: LatLng,
+): { point: LatLng; t: number; distance2: number } {
+  const vx = end.longitude - start.longitude;
+  const vy = end.latitude - start.latitude;
+  const wx = point.longitude - start.longitude;
+  const wy = point.latitude - start.latitude;
+
+  const len2 = vx * vx + vy * vy;
+  const tRaw = len2 > 0 ? (wx * vx + wy * vy) / len2 : 0;
+  const t = Math.max(0, Math.min(1, tRaw));
+
+  const projected = {
+    longitude: start.longitude + vx * t,
+    latitude: start.latitude + vy * t,
+  };
+
+  const dx = point.longitude - projected.longitude;
+  const dy = point.latitude - projected.latitude;
+
+  return {
+    point: projected,
+    t,
+    distance2: dx * dx + dy * dy,
+  };
+}
+
+function construirRecorridoHastaBus(paradas: Parada[], bus: LatLng): LatLng[] {
+  if (paradas.length === 0) return [];
+  if (paradas.length === 1) return [
+    { latitude: paradas[0].latitude, longitude: paradas[0].longitude },
+    bus,
+  ];
+
+  let mejorSegmento = 0;
+  let mejorProyeccion: LatLng = {
+    latitude: paradas[0].latitude,
+    longitude: paradas[0].longitude,
+  };
+  let mejorDistancia = Number.POSITIVE_INFINITY;
+
+  for (let i = 0; i < paradas.length - 1; i += 1) {
+    const start = { latitude: paradas[i].latitude, longitude: paradas[i].longitude };
+    const end = {
+      latitude: paradas[i + 1].latitude,
+      longitude: paradas[i + 1].longitude,
+    };
+
+    const projection = proyectarPuntoEnSegmento(bus, start, end);
+    if (projection.distance2 < mejorDistancia) {
+      mejorDistancia = projection.distance2;
+      mejorSegmento = i;
+      mejorProyeccion = projection.point;
+    }
+  }
+
+  const recorrido: LatLng[] = [];
+
+  for (let i = 0; i <= mejorSegmento; i += 1) {
+    recorrido.push({
+      latitude: paradas[i].latitude,
+      longitude: paradas[i].longitude,
+    });
+  }
+
+  recorrido.push(mejorProyeccion);
+
+  return recorrido;
+}
+
 function esCoordenadasValida(lat: any, lng: any): boolean {
   return (
     typeof lat === "number" &&
@@ -215,6 +287,27 @@ export default function RecorridoScreen() {
   const [sentidoSeleccionado, setSentidoSeleccionado] = useState<Sentido | null>("ida");
   const [mostrarMenuRutas, setMostrarMenuRutas] = useState(false);
 
+  const esModoSurIda = rutaSeleccionada === "sur" && sentidoSeleccionado === "ida";
+
+  const busMarkerPosition = useMemo(() => {
+    if (
+      latestPosition &&
+      esCoordenadasValida(latestPosition.latitude, latestPosition.longitude)
+    ) {
+      return {
+        latitude: latestPosition.latitude,
+        longitude: latestPosition.longitude,
+      };
+    }
+
+    return BUS_ACTUAL;
+  }, [latestPosition]);
+
+  const mostrarBusEnMapa =
+    esModoSurIda &&
+    (latestPosition?.id_ruta === "sur" || !latestPosition?.id_ruta) &&
+    esCoordenadasValida(busMarkerPosition.latitude, busMarkerPosition.longitude);
+
   const paradasFiltradas = useMemo(() => {
     const filtradas = todasLasParadas.filter(
       (p) =>
@@ -236,6 +329,12 @@ export default function RecorridoScreen() {
     });
   }, [todasLasParadas, rutaSeleccionada, sentidoSeleccionado]);
 
+  const recorridoBusPolyline = useMemo(() => {
+    if (!esModoSurIda || !mostrarBusEnMapa) return [];
+
+    return construirRecorridoHastaBus(paradasFiltradas, busMarkerPosition);
+  }, [esModoSurIda, mostrarBusEnMapa, paradasFiltradas, busMarkerPosition]);
+
   useEffect(() => {
     const cargarRuta = async () => {
       try {
@@ -256,6 +355,13 @@ export default function RecorridoScreen() {
   useEffect(() => {
     const cargarRutaSeleccionada = async () => {
       setCargandoRuta(true);
+
+      if (esModoSurIda) {
+        setRutaPolyline([]);
+        setMensajeRuta("Bus en ruta sur ida");
+        setCargandoRuta(false);
+        return;
+      }
 
       if (paradasFiltradas.length < 2) {
         setRutaPolyline([]);
@@ -296,7 +402,7 @@ export default function RecorridoScreen() {
     };
 
     cargarRutaSeleccionada();
-  }, [paradasFiltradas]);
+  }, [paradasFiltradas, esModoSurIda]);
 
   useEffect(() => {
     setParadas(paradasFiltradas);
@@ -413,7 +519,7 @@ export default function RecorridoScreen() {
         maxZoomLevel={120}
         onMapReady={() => setMapReady(true)}
       >
-        {rutaPolyline.length > 0 && (
+        {!esModoSurIda && rutaPolyline.length > 0 && (
           <>
             <Polyline
               coordinates={rutaPolyline}
@@ -430,6 +536,27 @@ export default function RecorridoScreen() {
               lineCap="round"
               lineJoin="round"
               zIndex={2}
+            />
+          </>
+        )}
+
+        {esModoSurIda && recorridoBusPolyline.length > 1 && (
+          <>
+            <Polyline
+              coordinates={recorridoBusPolyline}
+              strokeColor="#FFFFFF"
+              strokeWidth={9}
+              lineCap="round"
+              lineJoin="round"
+              zIndex={2}
+            />
+            <Polyline
+              coordinates={recorridoBusPolyline}
+              strokeColor="#16A34A"
+              strokeWidth={5}
+              lineCap="round"
+              lineJoin="round"
+              zIndex={3}
             />
           </>
         )}
@@ -474,9 +601,7 @@ export default function RecorridoScreen() {
           );
         })}
 
-        {/*
-          Icono del autobus desactivado temporalmente.
-          {esCoordenadasValida(busMarkerPosition.latitude, busMarkerPosition.longitude) && (
+        {mostrarBusEnMapa && (
           <Marker
             coordinate={busMarkerPosition}
             title="Burrito en ruta"
@@ -503,8 +628,7 @@ export default function RecorridoScreen() {
               </View>
             </View>
           </Marker>
-          )}
-        */}
+        )}
       </MapView>
 
       {cargandoRuta && (

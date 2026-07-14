@@ -1,36 +1,45 @@
 {
   "expo": {
-    "name": "TrackBus",
-    "slug": "TrackBus",
+    "name": "Burrito",
+    "slug": "burrito",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "trackbus",
+    "icon": "./assets/images/trackbus.png",
+    "scheme": "burrito",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "config": {
+        "googleMapsApiKey": "AIzaSyBHFnv9h5w6Y0y5BQPNOhtP_Pe-l0K3z1Q"
+      }
     },
     "android": {
+      "package": "com.burrito.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBHFnv9h5w6Y0y5BQPNOhtP_Pe-l0K3z1Q"
+        }
+      },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/trackbus.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/trackbus.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
@@ -43,6 +52,14 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "googleDirectionsApiKey": "AIzaSyCLaXxENpR7z6KdveHTNR8CoH1Yp9E7ojE",
+      "router": {},
+      "eas": {
+        "projectId": "39a876c0-ee2b-42a7-9d23-438c7043d18a"
+      }
+    },
+    "owner": "norbory"
   }
 }
